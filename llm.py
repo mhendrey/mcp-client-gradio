@@ -32,7 +32,7 @@ GEMMA3_TOP_P = 0.95
 
 
 def b64encode_file(filepath: str) -> str:
-    return base64.encode(open(filepath, "rb").read()).decode("utf-8")
+    return base64.b64encode(open(filepath, "rb").read()).decode("utf-8")
 
 
 class MessageProcessor:
