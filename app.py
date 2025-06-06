@@ -70,6 +70,8 @@ class MCPClientWrapper:
     ):
         if model_id != self.llm_client.model_id:
             self.llm_client.set_model_id(model_id)
+        think = think if self.llm_client.is_thinking else False
+
         message_text = message.get("text", "")
         message_files = message.get("files", [])
 
