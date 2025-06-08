@@ -721,6 +721,7 @@ dependencies = [
     { name = "magika" },
     { name = "mcp-server-fetch" },
     { name = "ollama" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -731,6 +732,7 @@ requires-dist = [
     { name = "magika", specifier = ">=0.6.2" },
     { name = "mcp-server-fetch", specifier = ">=2025.1.17" },
     { name = "ollama", specifier = ">=0.5.1" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
 ]
 
 [[package]]

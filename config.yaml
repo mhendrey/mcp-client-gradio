@@ -1,0 +1,13 @@
+models:
+  default: qwen3:30b
+  available: [qwen3:30b, gemma3:27b-it-qat]
+mcpServers:
+  blackforest:
+    command: python
+    args:
+    - -m
+    - mcp_server_blackforest
+  fetch:
+    command: uvx
+    args:
+    - mcp-server-fetch

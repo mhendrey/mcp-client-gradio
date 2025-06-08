@@ -11,4 +11,5 @@ dependencies = [
     "magika>=0.6.2",
     "mcp-server-fetch>=2025.1.17",
     "ollama>=0.5.1",
+    "pyyaml>=6.0.2",
 ]

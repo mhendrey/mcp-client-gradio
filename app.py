@@ -7,33 +7,43 @@ import logging
 from magika import Magika
 from pprint import pformat
 from typing import Any, Union, Iterable
+import yaml
 
 from llm import LLM_Client, MessageProcessor, HTML_PREFIX, HTML_SUFFIX
+from mcp_server_handlers import (
+    MCPServerRegistry,
+    DefaultHandler,
+    BlackforestHandler,
+    FetchHandler,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Constants
-DEFAULT_MODEL = "qwen3:30b"
-
-mcp_config = {
-    "mcpServers": {
-        # Local server running via stdio
-        "blackforest": {"command": "python", "args": ["-m", "mcp_server_blackforest"]},
-        "fetch": {"command": "uvx", "args": ["mcp-server-fetch"]},
-    }
-}
-
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 
 class MCPClientWrapper:
     def __init__(self):
-        self.client = Client(mcp_config)
+        self.logger = logging.getLogger(__name__)
+
+        self.configs = yaml.safe_load(open("config.yaml"))
+        self.default_model = self.configs["models"]["default"]
+        self.available_models = self.configs["models"]["available"]
+
+        # MCP Server Registry
+        self.registry = MCPServerRegistry()
+        for server_name, handler in [
+            ("blackforest", BlackforestHandler),
+            ("fetch", FetchHandler),
+        ]:
+            self.registry.add_server(
+                server_name, self.configs["mcpServers"][server_name], handler
+            )
+
+        self.client = Client(self.registry.get_mcp_config())
         self.tools = loop.run_until_complete(self.list_tools())
-        self.llm_client = LLM_Client(DEFAULT_MODEL, self.tools)
+        self.llm_client = LLM_Client(self.default_model, self.tools)
         self.message_processor = MessageProcessor()
         self.file_typer = Magika()
 
@@ -65,9 +75,12 @@ class MCPClientWrapper:
         self,
         message: MultimodalValue,
         history: list[Union[gr.ChatMessage, dict[str, Any]]],
-        model_id: str = DEFAULT_MODEL,
+        model_id: str = None,
         think: bool = True,
     ):
+        if model_id is None:
+            model_id = self.default_model
+
         if model_id != self.llm_client.model_id:
             self.llm_client.set_model_id(model_id)
         think = think if self.llm_client.is_thinking else False
@@ -92,9 +105,10 @@ class MCPClientWrapper:
             message_text, message_images, history
         )
 
-        logger.info("\n\nSubmitting the following messages to LLM")
+        self.logger.info("\n\nSubmitting the following messages to LLM")
         for m in messages:
-            logger.info(f"{pformat(m)}")
+            self.logger.info(f"{pformat(m)}")
+
         tool_calls = []
         try:
             for chunk, tool_calls in self.llm_client.stream_llm_response(
@@ -109,10 +123,16 @@ class MCPClientWrapper:
         tool_responses = []
         if tool_calls:
             for tool_name, tool_args in tool_calls:
+                handler = self.registry.get_handler(tool_name)
+                display_name = handler.get_tool_display_name(tool_name)
+
                 tool_response = gr.ChatMessage(
-                    content=f"{tool_name}\n{tool_args}",
+                    content=f"{display_name}\n{pformat(tool_args)}",
                     role="assistant",
-                    metadata={"title": f"Using {tool_name} tool", "status": "pending"},
+                    metadata={
+                        "title": f"Using {display_name} tool",
+                        "status": "pending",
+                    },
                 )
                 yield response + tool_responses + [tool_response]
 
@@ -122,27 +142,34 @@ class MCPClientWrapper:
                         self._execute_tool_call(tool_name, tool_args)
                     )
                     tool_response.metadata["status"] = "done"
+                    self.logger.info(
+                        f"Finished executing {tool_name} with {pformat(tool_args)}"
+                    )
+                    self.logger.info(f"\nResult is type {type(result)}\n")
                     tool_responses.append(tool_response)
+
+                    # Use handler to process the response
+                    handled_response = handler.handle_tool_response(
+                        tool_name, tool_args, result
+                    )
+                    self.logger.info(f"Finished handle response")
+                    if handled_response:
+                        tool_responses.append(handled_response)
+
                     yield response + tool_responses
                 except Exception as e:
-                    yield f"Error executing tool {tool_name} with {tool_args}: {e}"
-
-                if tool_name == "blackforest_generate_image":
-                    result = json.loads(result)
-                    if result["type"] == "image":
-                        black_forest_response = gr.ChatMessage(
-                            content=gr.Image(result["tmp_file"], label=result["message"]),
+                    error_msg = (
+                        f"Error executing tool {tool_name} with {tool_args}: {e}"
+                    )
+                    self.logger.error(error_msg)
+                    tool_responses.append(
+                        gr.ChatMessage(
+                            content=error_msg,
                             role="assistant",
+                            metadata={"title": "Tool Error", "status": "done"},
                         )
-                        tool_responses.append(black_forest_response)
-                        yield response + tool_responses
-                    else:
-                        tool_responses.append(result["message"])
-                        yield response + tool_responses
-                elif tool_name == "fetch_fetch":
-                    # Send the original prompt with the now attached text to the LLM again
-                    new_prompt = f"{message_text}\n\n<website>{result}</website>"
-                    yield response + tool_responses + [new_prompt]
+                    )
+                    yield response + tool_responses
 
     async def _execute_tool_call(self, tool_name: str, tool_args: dict):
         """Execute a tool call asynchronously"""
@@ -160,7 +187,7 @@ def create_interface():
         type="messages",
         multimodal=True,
         additional_inputs=[
-            gr.Dropdown(["gemma3:27b-it-qat", "qwen3:30b"], value=DEFAULT_MODEL),
+            gr.Dropdown(client.available_models, value=client.default_model),
             gr.Checkbox(label="Think Mode", show_label=True, value=True),
         ],
         chatbot=gr.Chatbot(
