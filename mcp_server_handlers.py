@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import gradio as gr
 import json
+from llm import LLM_Client
 import logging
 from typing import Any, Optional
 
@@ -64,11 +65,7 @@ class BlackforestHandler(MCPServerHandler):
                 result = json.loads(result_str)
                 if result["type"] == "image":
                     return gr.ChatMessage(
-                        content=gr.Image(
-                            result["tmp_file"],
-                            label=result["message"],
-                            show_label=True,
-                        ),
+                        content=gr.Image(result["tmp_file"]),
                         role="assistant",
                     )
                 else:

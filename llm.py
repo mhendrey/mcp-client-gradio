@@ -11,10 +11,6 @@ THINKING_MODELS = ["qwen3:30b"]
 MULTIMODAL_MODELS = ["gemma3:27b-it-qat"]
 TOOL_CALLING_MODELS = ["qwen3:30b"]
 
-## Display Thinking output
-HTML_PREFIX = "<!DOCTYPE html>\n<html>\n<body>\n<blockquote>"
-HTML_SUFFIX = "\n</blockquote>\n</body>\n</html>"
-
 ## Recommended values for "/think" mode in Qwen3
 QWEN3_THINK_TEMPERATURE = 0.6
 QWEN3_THINK_TOP_P = 0.95
@@ -118,7 +114,7 @@ class LLM_Client:
         model_id,
         tools: list = [],
     ):
-        self.model_id = self.set_model_id(model_id)
+        self.set_model_id(model_id)
         self.tools = tools
         self.logger = logging.getLogger(__name__)
 
@@ -156,6 +152,24 @@ class LLM_Client:
     def stream_llm_response(
         self, messages: list[Message], think: bool = False
     ) -> Generator:
+        """Send the list of ollama.Message to the LLM
+
+        Parameters
+        ----------
+        messages : list[Message]
+            Includes history plus user's latest prompt.
+        think : bool, optional
+            Whether to use "thinking" mode if model supports it, by default False
+
+        Yields
+        ------
+        Generator
+            Yields a 2-tuple. First element is a list of gr.ChatMessage which may have
+            one or two elements. If two elements, then it is a gr.ChatMessage for the
+            thinking content. The second (or only) is the final output of the llm. The
+            second element in the tuple is a list of any tool calls. Each element in
+            this list is a 2-tuple of the tool_name and the tool_args (dict)
+        """
         # Instantiate buffers
         if think:
             thinking_buffer = gr.ChatMessage(

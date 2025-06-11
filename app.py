@@ -2,19 +2,18 @@ import asyncio
 from fastmcp import Client
 import gradio as gr
 from gradio.components.multimodal_textbox import MultimodalValue
-import json
 import logging
 from magika import Magika
+from ollama import Message
 from pprint import pformat
-from typing import Any, Union, Iterable
+from typing import Any, Union
 import yaml
 
-from llm import LLM_Client, MessageProcessor, HTML_PREFIX, HTML_SUFFIX
+from llm import LLM_Client, MessageProcessor
 from mcp_server_handlers import (
     MCPServerRegistry,
     DefaultHandler,
     BlackforestHandler,
-    FetchHandler,
 )
 
 # Configure logging
@@ -35,7 +34,7 @@ class MCPClientWrapper:
         self.registry = MCPServerRegistry()
         for server_name, handler in [
             ("blackforest", BlackforestHandler),
-            ("fetch", FetchHandler),
+            ("fetch", DefaultHandler),
         ]:
             self.registry.add_server(
                 server_name, self.configs["mcpServers"][server_name], handler
@@ -119,12 +118,26 @@ class MCPClientWrapper:
         except Exception as e:
             yield f"Error doing initial LLM call: {e}"
 
-        response = chunk
-        tool_responses = []
+        thinking_tool_responses = []
+        thinking_chat = None
+        match len(chunk):
+            case 1:
+                if think:
+                    thinking_tool_responses.append(chunk[0])
+                else:
+                    content_chat = chunk[0]
+            case 2:
+                thinking_chat, content_chat = chunk
+                thinking_tool_responses.append(thinking_chat)
+
         if tool_calls:
             for tool_name, tool_args in tool_calls:
                 handler = self.registry.get_handler(tool_name)
                 display_name = handler.get_tool_display_name(tool_name)
+
+                # Hand jamming because the default value of 5000 is way too small
+                if tool_name == "fetch_fetch" and "max_length" not in tool_args:
+                    tool_args["max_length"] = 999999  # Maximum value it can be
 
                 tool_response = gr.ChatMessage(
                     content=f"{display_name}\n{pformat(tool_args)}",
@@ -134,7 +147,7 @@ class MCPClientWrapper:
                         "status": "pending",
                     },
                 )
-                yield response + tool_responses + [tool_response]
+                yield thinking_tool_responses + [tool_response]
 
                 # Run the tool
                 try:
@@ -145,31 +158,52 @@ class MCPClientWrapper:
                     self.logger.info(
                         f"Finished executing {tool_name} with {pformat(tool_args)}"
                     )
-                    self.logger.info(f"\nResult is type {type(result)}\n")
-                    tool_responses.append(tool_response)
+                    thinking_tool_responses.append(tool_response)
 
-                    # Use handler to process the response
-                    handled_response = handler.handle_tool_response(
-                        tool_name, tool_args, result
-                    )
-                    self.logger.info(f"Finished handle response")
-                    if handled_response:
-                        tool_responses.append(handled_response)
+                    if tool_name == "fetch_fetch":
+                        # Append fetched text to end of user's initial request
+                        messages[-1] = Message(
+                            role="user", content=f"{message_text}\n\n{result}"
+                        )
+                        try:
+                            for fetch_chunk, _ in self.llm_client.stream_llm_response(
+                                messages,
+                                think,
+                            ):
+                                yield thinking_tool_responses + fetch_chunk
+                        except Exception as e:
+                            yield f"Error doing initial LLM call: {e}"
 
-                    yield response + tool_responses
+                        match len(fetch_chunk):
+                            case 1:
+                                if think:
+                                    thinking_tool_responses.append(fetch_chunk[0])
+                                else:
+                                    content_chat = chunk[0]
+                            case 2:
+                                thinking_chat, content_chat = fetch_chunk
+                                thinking_tool_responses.append(thinking_chat)
+                    else:
+                        handled_response = handler.handle_tool_response(
+                            tool_name, tool_args, result
+                        )
+                        self.logger.info(f"Finished handle response")
+                        if handled_response:
+                            content_chat = handled_response
+
                 except Exception as e:
                     error_msg = (
                         f"Error executing tool {tool_name} with {tool_args}: {e}"
                     )
                     self.logger.error(error_msg)
-                    tool_responses.append(
+                    thinking_tool_responses.append(
                         gr.ChatMessage(
                             content=error_msg,
                             role="assistant",
                             metadata={"title": "Tool Error", "status": "done"},
                         )
                     )
-                    yield response + tool_responses
+                yield thinking_tool_responses + [content_chat]
 
     async def _execute_tool_call(self, tool_name: str, tool_args: dict):
         """Execute a tool call asynchronously"""
