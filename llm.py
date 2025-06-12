@@ -1,34 +1,9 @@
-import base64
 import gradio as gr
 import logging
 from magika import Magika
 from ollama import chat, Message
 from typing import Any, Generator, Union
-
-# Constants
-## Thinking Models
-THINKING_MODELS = ["qwen3:30b"]
-MULTIMODAL_MODELS = ["gemma3:27b-it-qat"]
-TOOL_CALLING_MODELS = ["qwen3:30b"]
-
-## Recommended values for "/think" mode in Qwen3
-QWEN3_THINK_TEMPERATURE = 0.6
-QWEN3_THINK_TOP_P = 0.95
-QWEN3_THINK_TOP_K = 20
-QWEN3_THINK_MIN_P = 0.0
-## RECOMMENDED values for "/no_think"
-QWEN3_TEMPERATURE = 0.7
-QWEN3_TOP_P = 0.8
-QWEN3_TOP_K = 20
-QWEN3_MIN_P = 0.0
-
-## RECOMMENDED values for Gemma3
-GEMMA3_TOP_K = 64
-GEMMA3_TOP_P = 0.95
-
-
-def b64encode_file(filepath: str) -> str:
-    return base64.b64encode(open(filepath, "rb").read()).decode("utf-8")
+import yaml
 
 
 class MessageProcessor:
@@ -80,9 +55,9 @@ class MessageProcessor:
                     file_type = self.magika.identify_path(content[0])
                     if file_type.output.group == "image":
                         if not message.images:
-                            message.images = [b64encode_file(content[0])]
+                            message.images = [content[0]]
                         else:
-                            message.images.append(b64encode_file(content[0]))
+                            message.images.append(content[0])
                     else:
                         continue
                 # This assumes that files are in `history` before associated text content
@@ -100,7 +75,7 @@ class MessageProcessor:
 
         user_message = Message(role="user", content=current_message)
         if current_images:
-            user_message.images = [b64encode_file(f) for f in current_images]
+            user_message.images = [f for f in current_images]
         messages.append(user_message)
 
         return messages
@@ -116,38 +91,11 @@ class LLM_Client:
     ):
         self.set_model_id(model_id)
         self.tools = tools
+        self.models_config = yaml.safe_load(open("config.yaml"))["models"]
         self.logger = logging.getLogger(__name__)
 
     def set_model_id(self, model_id):
         self.model_id = model_id
-        self.is_thinking = True if model_id in THINKING_MODELS else False
-        self.is_multimodal = True if model_id in MULTIMODAL_MODELS else False
-        self.is_tool_calling = True if model_id in TOOL_CALLING_MODELS else False
-
-    def _get_sample_params(self, think: bool = False) -> dict[str, Any]:
-        """Get sampling params based upon model and if using think"""
-        if self.model_id.startswith("gemma3"):
-            return {
-                "top_k": GEMMA3_TOP_K,
-                "top_p": GEMMA3_TOP_P,
-            }
-        elif self.model_id.startswith("qwen3"):
-            if think:
-                return {
-                    "temperature": QWEN3_THINK_TEMPERATURE,
-                    "top_p": QWEN3_THINK_TOP_P,
-                    "top_k": QWEN3_THINK_TOP_K,
-                    "min_p": QWEN3_THINK_MIN_P,
-                }
-            else:
-                return {
-                    "temperature": QWEN3_TEMPERATURE,
-                    "top_p": QWEN3_TOP_P,
-                    "top_k": QWEN3_TOP_K,
-                    "min_p": QWEN3_MIN_P,
-                }
-        else:
-            raise ValueError(f"No default values specified for {self.model_id}")
 
     def stream_llm_response(
         self, messages: list[Message], think: bool = False
@@ -180,15 +128,26 @@ class LLM_Client:
         content_buffer = gr.ChatMessage(content="", role="assistant")
         tool_calls = []
 
-        # Call the LLM
+        # Set sampling parameters from config file and call the LLM
+        sampling_params = self.models_config[self.model_id].get("sampling_params", None)
+        if think:
+            sampling_params = self.models_config[self.model_id].get(
+                "sampling_params_thinking", sampling_params
+            )
         try:
             llm_stream = chat(
                 model=self.model_id,
                 messages=messages,
-                tools=self.tools if self.is_tool_calling else None,
+                tools=(
+                    self.tools
+                    if self.models_config[self.model_id]["tool_calling"]
+                    else None
+                ),
                 stream=True,
-                think=think if self.is_thinking else False,
-                options=self._get_sample_params(think),
+                think=(
+                    think if self.models_config[self.model_id]["thinking"] else False
+                ),
+                options=sampling_params,
             )
             for chunk in llm_stream:
                 # Handle thinking tokens

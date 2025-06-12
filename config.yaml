@@ -1,6 +1,26 @@
 models:
   default: qwen3:30b
-  available: [qwen3:30b, gemma3:27b-it-qat]
+  gemma3:27b-it-qat:
+    sampling_params:
+      top_k: 64
+      top_p: 0.95
+    thinking: false
+    multimodal: true
+    tool_calling: false
+  qwen3:30b:
+    sampling_params:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      min_p: 0.0
+    sampling_params_thinking:
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+    thinking: true
+    multimodal: false
+    tool_calling: true
 mcpServers:
   blackforest:
     command: python

@@ -1,4 +1,6 @@
 import asyncio
+from dataclasses import dataclass
+from docling.document_converter import DocumentConverter
 from fastmcp import Client
 import gradio as gr
 from gradio.components.multimodal_textbox import MultimodalValue
@@ -22,13 +24,64 @@ loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 
+@dataclass
+class ProcessedFiles:
+    images: list[str]
+    documents: list[str]
+
+
+class FileProcessor:
+    def __init__(self):
+        self.file_typer = Magika()
+        self.converter = DocumentConverter()
+
+    def process_files(self, files: list[str]) -> ProcessedFiles:
+        """Process uploaded files and categorize them.
+
+        Parameters
+        ----------
+        files : list[str]
+            Paths to uploaded documents
+
+        Returns
+        -------
+        ProcessedFiles
+        """
+        images = []
+        documents = []
+
+        file_types = self.file_typer.identify_paths(files)
+        for filepath, file_type in zip(files, file_types):
+            if file_type.output.group == "image":
+                images.append(filepath)
+            elif file_type.output.is_text:
+                documents.append(open(filepath).read())
+            elif file_type.output.group == "document":
+                document_content = self._extract_document_text(filepath)
+                documents.append(document_content)
+
+        return ProcessedFiles(images=images, documents=documents)
+
+    def _extract_document_text(self, filepath: str) -> str:
+        try:
+            doc = self.converter.convert(filepath).document
+            doc_content = doc.export_to_markdown()
+        except Exception as e:
+            raise Exception(
+                f"Error with docling conversion to markdown on {filepath}: {e}"
+            )
+        return doc_content
+
+
 class MCPClientWrapper:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
         self.configs = yaml.safe_load(open("config.yaml"))
         self.default_model = self.configs["models"]["default"]
-        self.available_models = self.configs["models"]["available"]
+        self.available_models = [key for key in self.configs["models"] if key != "default"]
+
+        self.fileprocessor = FileProcessor()
 
         # MCP Server Registry
         self.registry = MCPServerRegistry()
@@ -56,20 +109,6 @@ class MCPClientWrapper:
 
         return tools
 
-    @staticmethod
-    def document_to_markdown(filepath: str) -> str:
-        pass
-
-    def process_files(self, uploaded_files: list[str]) -> tuple[str, list[str]]:
-        message_images = []
-        document_text = ""
-        file_types = self.file_typer.identify_paths(uploaded_files)
-        for f, file_type in zip(uploaded_files, file_types):
-            if file_type.output.group == "image":
-                message_images.append(f)
-            elif file_type.output.group == "document" or file_type.output.is_text:
-                pass  # Call markitdown
-
     def process_message(
         self,
         message: MultimodalValue,
@@ -82,26 +121,26 @@ class MCPClientWrapper:
 
         if model_id != self.llm_client.model_id:
             self.llm_client.set_model_id(model_id)
-        think = think if self.llm_client.is_thinking else False
+        think = (
+            think
+            if self.llm_client.models_config[model_id]["thinking"]
+            else False
+        )
 
         message_text = message.get("text", "")
         message_files = message.get("files", [])
+        self.logger.info(f"message_files has type {type(message_files)}")
 
         # Deal with files.
         # Image files will be passed to LLM (if multimodal)
         # Other files will have text extracted to be added to the message_text
-        message_images = []
-        for f in message_files:
-            file_type = self.file_typer.identify_path(f).output
-            if file_type.group == "image":
-                message_images.append(f)
-            if file_type.is_text or file_type.group == "document":
-                # pass to markitdown
-                pass
+        uploaded_files = self.fileprocessor.process_files(message_files)
+        for doc in uploaded_files.documents:
+            message_text += f"\n\nProvided Document:\n\n{doc}"
 
         # Convert Gradio messages to list[ollama.Message]
         messages = self.message_processor.build_message_history(
-            message_text, message_images, history
+            message_text, uploaded_files.images, history
         )
 
         self.logger.info("\n\nSubmitting the following messages to LLM")
@@ -236,8 +275,8 @@ def create_interface():
             file_count="multiple",
         ),
         title="MCP Client Chatbot",
-        theme="allenai/gradio-theme",
-        # theme="ParityError/Interstellar",
+        #theme="allenai/gradio-theme",
+        theme="earneleh/paris",
         concurrency_limit=16,
     )
 
