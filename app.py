@@ -79,7 +79,9 @@ class MCPClientWrapper:
 
         self.configs = yaml.safe_load(open("config.yaml"))
         self.default_model = self.configs["models"]["default"]
-        self.available_models = [key for key in self.configs["models"] if key != "default"]
+        self.available_models = [
+            key for key in self.configs["models"] if key != "default"
+        ]
 
         self.fileprocessor = FileProcessor()
 
@@ -115,17 +117,14 @@ class MCPClientWrapper:
         history: list[Union[gr.ChatMessage, dict[str, Any]]],
         model_id: str = None,
         think: bool = True,
+        system_prompt: str = "",
     ):
         if model_id is None:
             model_id = self.default_model
 
         if model_id != self.llm_client.model_id:
             self.llm_client.set_model_id(model_id)
-        think = (
-            think
-            if self.llm_client.models_config[model_id]["thinking"]
-            else False
-        )
+        think = think if self.llm_client.models_config[model_id]["thinking"] else False
 
         message_text = message.get("text", "")
         message_files = message.get("files", [])
@@ -140,7 +139,7 @@ class MCPClientWrapper:
 
         # Convert Gradio messages to list[ollama.Message]
         messages = self.message_processor.build_message_history(
-            message_text, uploaded_files.images, history
+            message_text, uploaded_files.images, history, system_prompt
         )
 
         self.logger.info("\n\nSubmitting the following messages to LLM")
@@ -262,6 +261,12 @@ def create_interface():
         additional_inputs=[
             gr.Dropdown(client.available_models, value=client.default_model),
             gr.Checkbox(label="Think Mode", show_label=True, value=True),
+            gr.Textbox(
+                label="System Prompt",
+                show_label=True,
+                placeholder="Instructs the LLM on how to respond, setting its tone, "
+                "role, and guidelines for interactions.",
+            ),
         ],
         chatbot=gr.Chatbot(
             type="messages",
@@ -275,7 +280,7 @@ def create_interface():
             file_count="multiple",
         ),
         title="MCP Client Chatbot",
-        #theme="allenai/gradio-theme",
+        # theme="allenai/gradio-theme",
         theme="earneleh/paris",
         concurrency_limit=16,
     )

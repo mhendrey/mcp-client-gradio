@@ -37,9 +37,14 @@ class MessageProcessor:
         current_message: str,
         current_images: list,
         history: list[Union[gr.ChatMessage, dict[str, Any]]],
+        system_prompt: str,
     ) -> list[Message]:
         """Build messages array to give to Ollama LLM."""
         messages = []
+        # Appending system_prompt to the beginning if not already there
+        if system_prompt:
+            messages.append(Message(role="system", content=system_prompt))
+
         message = Message(role="dummy")
         for msg in history:
             try:
